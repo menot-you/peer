@@ -1,0 +1,50 @@
+# peer-mcp — default backend registry.
+#
+# This file is shipped with the MCP and copied to `~/.nott/peer.toml` on the
+# first boot if that file does not exist. Edit `~/.nott/peer.toml` to add new
+# backends or override defaults; this file is NEVER read at runtime if a user
+# toml exists.
+#
+# Placeholders supported in `args`:
+#   {prompt}               — substituted with the caller's prompt
+#   {env:VAR:default}      — env var with fallback
+#   {extra}                — splat of caller-supplied extra_args
+#
+# If `stdin = true`, the prompt is piped via stdin and {prompt} is NOT
+# substituted in args. Use one mechanism, not both.
+
+[[backend]]
+name = "codex"
+description = "OpenAI Codex CLI — forensic code verification"
+command = "codex"
+args = ["exec"]
+stdin = true
+timeout_ms_default = 480000
+auth_hint = "run `codex login` if calls return 401/403"
+
+[[backend]]
+name = "gemini"
+description = "Google Gemini CLI — architectural reasoning"
+command = "gemini"
+args = ["-p", "{prompt}"]
+stdin = false
+timeout_ms_default = 120000
+auth_hint = "run `gemini auth` if calls return auth errors"
+
+[[backend]]
+name = "minimax"
+description = "Claude CLI via MiniMax settings — outside-triad perspective"
+command = "claude"
+args = ["--settings", "{env:MINIMAX_SETTINGS:~/.claude/settings.minimax.json}", "-p", "{prompt}"]
+stdin = false
+timeout_ms_default = 180000
+auth_hint = "check ~/.claude/settings.minimax.json"
+
+[[backend]]
+name = "claude"
+description = "Fresh Claude CLI — product/architecture reasoning"
+command = "claude"
+args = ["-p", "{prompt}"]
+stdin = false
+timeout_ms_default = 180000
+auth_hint = "run `claude auth login` if calls return auth errors"
