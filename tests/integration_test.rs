@@ -110,7 +110,11 @@ timeout_ms_default = 10000
     )
     .await
     .expect("dispatch");
-    assert!(resp.raw.contains("hello-stdin"), "raw did not include stdin: {}", resp.raw);
+    assert!(
+        resp.raw.contains("hello-stdin"),
+        "raw did not include stdin: {}",
+        resp.raw
+    );
     assert_eq!(resp.verdict, Verdict::Conditional);
     assert!(resp.artifact_path.is_none());
 }
@@ -183,7 +187,10 @@ timeout_ms_default = 10000
         },
     )
     .await;
-    assert!(err.is_ok(), "should not timeout with 10s window for 5s sleep");
+    assert!(
+        err.is_ok(),
+        "should not timeout with 10s window for 5s sleep"
+    );
 }
 
 #[tokio::test]

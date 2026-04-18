@@ -97,7 +97,11 @@ pub async fn dispatch(registry: &Registry, req: AskRequest) -> Result<AskRespons
     let start = Instant::now();
     let mut cmd = Command::new(&spec.command);
     cmd.args(&expanded_args)
-        .stdin(if spec.stdin { Stdio::piped() } else { Stdio::null() })
+        .stdin(if spec.stdin {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        })
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     for (k, v) in &spec.env {
@@ -125,17 +129,16 @@ pub async fn dispatch(registry: &Registry, req: AskRequest) -> Result<AskRespons
     }
 
     let wait = child.wait_with_output();
-    let output =
-        match tokio::time::timeout(Duration::from_millis(timeout), wait).await {
-            Ok(Ok(output)) => output,
-            Ok(Err(e)) => return Err(PeerError::Io(e)),
-            Err(_) => {
-                return Err(PeerError::Timeout {
-                    backend: spec.name.clone(),
-                    elapsed_ms: timeout,
-                });
-            }
-        };
+    let output = match tokio::time::timeout(Duration::from_millis(timeout), wait).await {
+        Ok(Ok(output)) => output,
+        Ok(Err(e)) => return Err(PeerError::Io(e)),
+        Err(_) => {
+            return Err(PeerError::Timeout {
+                backend: spec.name.clone(),
+                elapsed_ms: timeout,
+            });
+        }
+    };
 
     let elapsed_ms = u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX);
     let raw = String::from_utf8(output.stdout).map_err(|_| PeerError::ParseFailure {
@@ -317,11 +320,7 @@ mod tests {
     #[test]
     fn expand_extra_splat_at_position() {
         let args = vec!["a".into(), "{extra}".into(), "b".into()];
-        let out = expand_args(
-            &args,
-            "",
-            &["x".into(), "y".into()],
-        );
+        let out = expand_args(&args, "", &["x".into(), "y".into()]);
         assert_eq!(out, vec!["a", "x", "y", "b"]);
     }
 

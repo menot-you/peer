@@ -19,15 +19,25 @@ use tracing_subscriber::EnvFilter;
 async fn main() -> anyhow::Result<()> {
     // Tracing goes to stderr so stdout stays clean for MCP protocol frames.
     tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")))
+        .with_env_filter(
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
+        )
         .with_writer(std::io::stderr)
         .init();
 
-    tracing::info!(target = "peer", version = env!("CARGO_PKG_VERSION"), "starting peer-mcp");
+    tracing::info!(
+        target = "peer",
+        version = env!("CARGO_PKG_VERSION"),
+        "starting peer-mcp"
+    );
 
     let registry = Registry::load().map_err(|e| {
         let code = e.exit_code();
-        tracing::error!(target = "peer", exit_code = code, "registry load failed: {e}");
+        tracing::error!(
+            target = "peer",
+            exit_code = code,
+            "registry load failed: {e}"
+        );
         anyhow::Error::from(e)
     })?;
 

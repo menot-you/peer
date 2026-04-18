@@ -23,9 +23,9 @@
 //! no rebuild required.
 
 use std::collections::BTreeMap;
+use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::env;
 
 use serde::{Deserialize, Serialize};
 
@@ -170,9 +170,8 @@ impl Registry {
 }
 
 fn read_registry_file(path: &Path) -> Result<RegistryFile, PeerError> {
-    let bytes = fs::read_to_string(path).map_err(|e| {
-        PeerError::RegistryLoad(format!("read {}: {e}", path.display()))
-    })?;
+    let bytes = fs::read_to_string(path)
+        .map_err(|e| PeerError::RegistryLoad(format!("read {}: {e}", path.display())))?;
     toml::from_str::<RegistryFile>(&bytes)
         .map_err(|e| PeerError::RegistryLoad(format!("parse {}: {e}", path.display())))
 }
@@ -184,9 +183,8 @@ fn ensure_user_config(user: &Path, defaults: &Path) -> Result<bool, PeerError> {
         return Ok(false);
     }
     if let Some(parent) = user.parent() {
-        fs::create_dir_all(parent).map_err(|e| {
-            PeerError::RegistryLoad(format!("create {}: {e}", parent.display()))
-        })?;
+        fs::create_dir_all(parent)
+            .map_err(|e| PeerError::RegistryLoad(format!("create {}: {e}", parent.display())))?;
     }
     if !defaults.is_file() {
         return Err(PeerError::RegistryLoad(format!(
@@ -265,14 +263,11 @@ impl EnvProvider for RealEnv {
             v.push(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("peer-defaults.toml"));
             v
         };
-        candidates
-            .into_iter()
-            .find(|p| p.is_file())
-            .ok_or_else(|| {
-                PeerError::RegistryLoad(
-                    "could not locate peer-defaults.toml (set $PEER_DEFAULTS_TOML)".to_string(),
-                )
-            })
+        candidates.into_iter().find(|p| p.is_file()).ok_or_else(|| {
+            PeerError::RegistryLoad(
+                "could not locate peer-defaults.toml (set $PEER_DEFAULTS_TOML)".to_string(),
+            )
+        })
     }
 }
 

@@ -7,7 +7,7 @@ use rmcp::handler::server::tool::ToolRouter;
 use rmcp::model::*;
 use rmcp::schemars;
 use rmcp::schemars::JsonSchema;
-use rmcp::{ServerHandler, handler::server::wrapper::Parameters, tool, tool_handler, tool_router};
+use rmcp::{handler::server::wrapper::Parameters, tool, tool_handler, tool_router, ServerHandler};
 use serde::Deserialize;
 
 use crate::dispatch::{dispatch, AskRequest};
@@ -126,10 +126,7 @@ impl PeerMcpServer {
     #[tool(
         description = "Dispatch a prompt to a peer LLM CLI (codex, gemini, minimax, claude, …) and return raw output + verdict."
     )]
-    async fn ask(
-        &self,
-        params: Parameters<AskParams>,
-    ) -> Result<CallToolResult, rmcp::ErrorData> {
+    async fn ask(&self, params: Parameters<AskParams>) -> Result<CallToolResult, rmcp::ErrorData> {
         let p = params.0;
         let req = AskRequest {
             backend: p.backend,
@@ -144,7 +141,9 @@ impl PeerMcpServer {
     }
 
     /// List all backends registered in the resolved precedence chain.
-    #[tool(description = "List all backends registered. Includes registry path and override flags.")]
+    #[tool(
+        description = "List all backends registered. Includes registry path and override flags."
+    )]
     async fn list_backends(
         &self,
         _params: Parameters<ListBackendsParams>,
