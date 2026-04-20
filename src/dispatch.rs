@@ -4,9 +4,19 @@ use std::collections::HashMap;
 use std::io::ErrorKind;
 use std::path::PathBuf;
 use std::process::Stdio;
+use std::sync::LazyLock;
 use std::time::Instant;
 
 use regex::Regex;
+
+/// Verdict regex — compiled once at static init. The pattern is a literal
+/// validated by tests (`parse_verdict_*`), so panicking at init is acceptable
+/// and unreachable in practice.
+#[allow(clippy::expect_used)]
+static VERDICT_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?i)\bverdict[:\s]+(lgtm|block|conditional)\b")
+        .expect("VERDICT_RE literal must compile")
+});
 use serde::{Deserialize, Serialize};
 use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
@@ -267,10 +277,8 @@ pub fn parse_verdict(raw: &str) -> Verdict {
         .collect::<Vec<_>>()
         .join("\n");
     // Case-insensitive: VERDICT or Verdict, followed by : or whitespace,
-    // then LGTM|BLOCK|CONDITIONAL.
-    let re = Regex::new(r"(?i)\bverdict[:\s]+(lgtm|block|conditional)\b")
-        .expect("static regex compiles");
-    if let Some(caps) = re.captures(&tail) {
+    // then LGTM|BLOCK|CONDITIONAL. Regex is a module-level LazyLock.
+    if let Some(caps) = VERDICT_RE.captures(&tail) {
         match caps[1].to_ascii_uppercase().as_str() {
             "LGTM" => Verdict::Lgtm,
             "BLOCK" => Verdict::Block,
