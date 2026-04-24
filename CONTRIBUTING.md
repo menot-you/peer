@@ -21,15 +21,30 @@ the full suite without `codex`, `gemini`, or `claude` installed.
 src/
 ├── main.rs        # Entrypoint — stdio MCP server startup, tracing init
 ├── lib.rs         # Public crate surface, module index
-├── tools.rs       # MCP tool router via rmcp (`ask`, `list_backends`)
-├── dispatch.rs    # Placeholder expansion → spawn → timeout → verdict parse
-├── registry.rs    # Layered TOML merge (defaults → user → project → env)
-└── error.rs       # Typed error enum with stable exit codes
+├── tools.rs       # MCP tool router via rmcp (`ask`, `image`, `video`, `list_backends`)
+├── dispatch.rs    # `ask` path: placeholder expansion → spawn → verdict parse
+├── registry.rs    # Layered TOML merge + BackendKind/Transport enums
+├── error.rs       # Typed error enum with stable exit codes
+├── project.rs     # project_root resolver ($NOTT_PROJECT_ROOT / git / cwd)
+├── session.rs     # Session dir + tailable stdout/stderr logs for `ask`
+├── image/         # `image` tool: Nano Banana + MiniMax + codex providers
+│   ├── mod.rs      # dispatch_image, ImageRequest/Response, provider trait
+│   ├── http.rs     # shared reqwest client + magic-byte extension sniff
+│   ├── gemini.rs   # Nano Banana (HTTP generateContent)
+│   ├── minimax.rs  # MiniMax image-01 (HTTP)
+│   ├── cli.rs      # codex subprocess with $imagegen template + retry
+│   └── session.rs  # Flat output layout under .nott/generated/images/
+└── video/         # `video` tool: MiniMax + Veo providers
+    ├── mod.rs      # dispatch_video + async task orchestration
+    ├── minimax.rs  # MiniMax video-01 / Hailuo-02 (async create+poll+dl)
+    ├── veo.rs      # Google Veo via Gemini LRO predictLongRunning
+    └── session.rs  # Flat output layout under .nott/generated/videos/
 
 tests/
-└── integration_test.rs   # End-to-end: MCP transport + fake backends
+├── integration_test.rs   # End-to-end `ask`: MCP transport + fake backends
+└── image_smoke.rs        # End-to-end `image`: wiremock-driven HTTP flows
 
-peer-defaults.toml        # Shipped default registry (4 backends)
+peer-defaults.toml        # Shipped default registry (ask + image + video)
 ```
 
 Everything that handles subprocesses lives in `dispatch.rs`. Everything that
@@ -91,12 +106,14 @@ through the fake-CLI harness. The real CLI is NEVER called from tests.
 
 ## Adding a Tool
 
-Peer's surface is intentionally tiny — two tools. Before adding a third:
+Peer's surface is intentionally tight — four tools (`ask`, `image`,
+`video`, `list_backends`). Before adding a fifth:
 
-1. Can this be a new `extra_args` / `extra_env` pattern on `ask`?
+1. Can this be a new `extra_args` / `extra_env` / placeholder on `ask`?
 2. Can this be computed client-side from `list_backends` output?
-3. Does adding this tool make the MCP reach into a new domain (filesystem,
-   network, something outside "dispatch a prompt")?
+3. Can this ride on the existing `image` / `video` tool with a new
+   provider or `kinds` value on `BackendSpec`?
+4. Does adding this tool make the MCP reach into a genuinely new domain?
 
 If you still need a new tool, the pattern is in `src/tools.rs`:
 
@@ -104,8 +121,29 @@ If you still need a new tool, the pattern is in `src/tools.rs`:
 2. Add a `#[tool(description = "…")] async fn your_tool(...)` to the
    `#[tool_router] impl PeerMcpServer` block.
 3. Return `Result<CallToolResult, rmcp::ErrorData>`.
-4. Add integration tests in `tests/integration_test.rs`.
-5. Update `README.md` under `## Tools`.
+4. Add integration tests (`tests/*.rs`).
+5. Update `README.md` under `## Tools` and the server `with_instructions`
+   string.
+
+## Adding an Image / Video Provider
+
+The `image` and `video` dispatchers are capability-based. A new provider
+requires:
+
+1. Decide HTTP or CLI transport. HTTP means a new module under
+   `src/image/` or `src/video/` implementing `ImageBackend` /
+   `VideoBackend`. CLI reuses the existing subprocess machinery and
+   only needs TOML changes (`image_template`, `image_extra_args`, …).
+2. For HTTP, wire the provider name into the `dispatch_http` match arm
+   in `src/image/mod.rs` or `src/video/mod.rs`.
+3. Add a seed entry to `peer-defaults.toml` with `kinds`, `transport`,
+   `provider`, `api_key_env`, and sensible `timeout_ms_default` /
+   `aspect_ratio_default`.
+4. Update `scripts/peer-migrate-image.py` in the parent repo so
+   existing users can merge the new backend into their
+   `~/.nott/peer.toml`.
+5. Unit-test the provider-specific JSON parsing. Integration-test the
+   full dispatch flow with wiremock where feasible.
 
 ## Adding a Placeholder
 
