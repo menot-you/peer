@@ -48,6 +48,31 @@ pub enum PeerError {
     /// Invalid input supplied by the caller (timeout out of range, etc).
     #[error("invalid input: {0}")]
     InvalidInput(String),
+
+    /// Backend requires an env var that is unset (e.g. image provider API key).
+    #[error("missing api key for {backend}: env var {env_var} is unset")]
+    MissingApiKey { backend: String, env_var: String },
+
+    /// HTTP image provider returned non-success or transport error.
+    #[error("http failure for {backend}: {message}")]
+    HttpFailure { backend: String, message: String },
+
+    /// Image provider returned payload that could not be parsed / decoded.
+    #[error("provider payload error for {backend}: {message}")]
+    ProviderPayload { backend: String, message: String },
+
+    /// CLI image backend (codex) ran but produced no valid file at the
+    /// ditado `output_path`.
+    #[error("image not produced at {path} for {backend}: {reason}")]
+    ImageNotProduced {
+        backend: String,
+        path: String,
+        reason: String,
+    },
+
+    /// Requested capability (`kinds`) is not supported by this backend.
+    #[error("backend {backend} does not support kind={kind}")]
+    UnsupportedKind { backend: String, kind: String },
 }
 
 impl PeerError {
@@ -62,6 +87,11 @@ impl PeerError {
             Self::RegistryLoad(_) => 6,
             Self::Io(_) => 1, // treat IO as binary-unreachable
             Self::InvalidInput(_) => 7,
+            Self::MissingApiKey { .. } => 8,
+            Self::HttpFailure { .. } => 9,
+            Self::ProviderPayload { .. } => 10,
+            Self::ImageNotProduced { .. } => 11,
+            Self::UnsupportedKind { .. } => 12,
         }
     }
 }

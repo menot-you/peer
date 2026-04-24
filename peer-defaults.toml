@@ -15,12 +15,19 @@
 
 [[backend]]
 name = "codex"
-description = "OpenAI Codex CLI — forensic code verification"
+description = "OpenAI Codex CLI — forensic code verification (ask) + $imagegen convention (image)"
 command = "codex"
 args = ["exec"]
 stdin = true
 timeout_ms_default = 480000
 auth_hint = "run `codex login` if calls return 401/403"
+kinds = ["ask", "image"]
+# Image dispatch reuses the `codex` binary but appends --full-auto so the
+# imagegen plugin can run tool calls without approval prompts.
+image_extra_args = ["--full-auto"]
+image_template = "$imagegen {prompt}. Salve em {output_path}"
+image_edit_template = "$imagegen {edit_prompt}. Salve em {output_path}"
+image_edit_prefix_args = ["-i", "{input_path}"]
 
 [[backend]]
 name = "gemini"
@@ -48,3 +55,53 @@ args = ["-p", "{prompt}"]
 stdin = false
 timeout_ms_default = 180000
 auth_hint = "run `claude auth login` if calls return auth errors"
+
+# -------------------------------------------------------------------------
+# Image backends — invoked via the `image` MCP tool. These entries set
+# `kinds = ["image"]` so they do NOT appear in `ask`. The `command` field is
+# unused for HTTP transport but must be present; convention is to repeat
+# the provider name.
+# -------------------------------------------------------------------------
+
+[[backend]]
+name = "nanobanana"
+description = "Nano Banana (Gemini image) — HTTP via generativelanguage.googleapis.com"
+command = "nanobanana"  # unused for http transport
+timeout_ms_default = 60000
+kinds = ["image"]
+transport = "http"
+provider = "gemini"
+model = "gemini-3.1-flash-image-preview"
+api_key_env = "GOOGLE_AI_API_KEY"
+base_url = "https://generativelanguage.googleapis.com/v1beta"
+aspect_ratio_default = "16:9"
+auth_hint = "set GOOGLE_AI_API_KEY from https://aistudio.google.com/apikey"
+
+[[backend]]
+name = "minimax-image"
+description = "MiniMax image-01 — HTTP via api.minimax.io (global; Chinese platform uses .minimaxi.com + separate key)"
+command = "minimax-image"  # unused for http transport
+timeout_ms_default = 60000
+kinds = ["image"]
+transport = "http"
+provider = "minimax"
+model = "image-01"
+api_key_env = "MINIMAX_API_KEY"
+base_url = "https://api.minimax.io/v1/image_generation"
+aspect_ratio_default = "16:9"
+auth_hint = "set MINIMAX_API_KEY for the global platform (api.minimax.io). Chinese platform uses api.minimaxi.com with a separate key."
+
+[[backend]]
+name = "minimax-video"
+description = "MiniMax video (async: create task -> poll -> download). Hailuo-02 default. Wall-clock ~3-5 min typical."
+command = "minimax-video"  # unused for http transport
+# 10 min default budget; API takes 2-5 min typical, worst ~8 min.
+timeout_ms_default = 600000
+kinds = ["video"]
+transport = "http"
+provider = "minimax"
+model = "MiniMax-Hailuo-02"
+api_key_env = "MINIMAX_API_KEY"
+# Base URL is the /v1 prefix; provider appends /video_generation, /query/video_generation, /files/retrieve.
+base_url = "https://api.minimax.io/v1"
+auth_hint = "set MINIMAX_API_KEY for the global platform. Video uses the same key as image-01."

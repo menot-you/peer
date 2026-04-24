@@ -31,6 +31,51 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::PeerError;
 
+/// Which tool surfaces this backend serves. A backend may serve multiple
+/// kinds — e.g. `codex` can power both `ask` (text LLM) and `image` (via the
+/// `$imagegen` convention). Missing defaults to `["ask"]` for backward compat
+/// with older `peer.toml` files that predate image/video support.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum BackendKind {
+    /// Text LLM dispatch via the `ask` tool.
+    Ask,
+    /// Image generation / edit dispatch via the `image` tool.
+    Image,
+    /// Video generation dispatch via the `video` tool (MiniMax video-01,
+    /// Hailuo-02, etc — async task + poll + download).
+    Video,
+}
+
+impl BackendKind {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Ask => "ask",
+            Self::Image => "image",
+            Self::Video => "video",
+        }
+    }
+}
+
+/// Transport used by the image dispatcher when this backend is invoked with
+/// `kind="image"`. `Cli` reuses the same subprocess machinery as `ask`
+/// (prompt template + optional input file via `-i`). `Http` talks to a REST
+/// endpoint directly (e.g. Gemini `streamGenerateContent`, MiniMax
+/// `image_generation`). Ignored for `ask` dispatch.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum Transport {
+    /// Subprocess CLI spawn.
+    #[default]
+    Cli,
+    /// HTTP REST call via reqwest.
+    Http,
+}
+
+fn default_kinds() -> Vec<BackendKind> {
+    vec![BackendKind::Ask]
+}
+
 /// Canonical spec for one backend. Pure schema — never hardcoded.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct BackendSpec {
@@ -39,7 +84,10 @@ pub struct BackendSpec {
     /// Human-readable description surfaced via `list_backends`.
     #[serde(default)]
     pub description: String,
-    /// Executable to invoke (must resolve via `$PATH` unless absolute).
+    /// Executable to invoke (must resolve via `$PATH` unless absolute). For
+    /// pure-HTTP image backends, this is unused — set to anything (convention:
+    /// repeat the provider name) because the image dispatcher checks
+    /// `transport` before spawning.
     pub command: String,
     /// Base arguments. Supports `{prompt}`, `{env:VAR:default}`, `{extra}`.
     #[serde(default)]
@@ -57,10 +105,63 @@ pub struct BackendSpec {
     /// Optional auth hint surfaced when the subprocess reports an auth error.
     #[serde(default)]
     pub auth_hint: Option<String>,
+
+    // ---------------------------------------------------------------------
+    // Image-specific fields (all optional — `ask`-only backends ignore them).
+    // ---------------------------------------------------------------------
+    /// Tool surfaces this backend serves. Default `["ask"]` preserves
+    /// behavior for pre-image-support toml files.
+    #[serde(default = "default_kinds")]
+    pub kinds: Vec<BackendKind>,
+    /// Transport to use when invoked with `kind="image"`. Default `Cli`.
+    #[serde(default)]
+    pub transport: Transport,
+    /// Provider discriminator for HTTP image backends (`gemini`, `minimax`).
+    /// Unused when `transport=cli`.
+    #[serde(default)]
+    pub provider: Option<String>,
+    /// Default model name (e.g. `gemini-3.1-flash-image-preview`, `image-01`).
+    #[serde(default)]
+    pub model: Option<String>,
+    /// Env var that carries the API key (e.g. `GOOGLE_AI_API_KEY`).
+    #[serde(default)]
+    pub api_key_env: Option<String>,
+    /// Base URL for HTTP providers (e.g. `https://generativelanguage.googleapis.com/v1beta`).
+    #[serde(default)]
+    pub base_url: Option<String>,
+    /// Default aspect ratio (e.g. `16:9`). Backend-specific enum values.
+    #[serde(default)]
+    pub aspect_ratio_default: Option<String>,
+    /// Prompt template for CLI image generate. Supports `{prompt}` and
+    /// `{output_path}`. Example (codex):
+    /// `"$imagegen {prompt}. Salve em {output_path}"`.
+    #[serde(default)]
+    pub image_template: Option<String>,
+    /// Prompt template for CLI image edit. Supports `{edit_prompt}` and
+    /// `{output_path}`.
+    #[serde(default)]
+    pub image_edit_template: Option<String>,
+    /// Extra argv slice injected BEFORE the prompt when editing (e.g.
+    /// codex `-i <input_path>`). Supports `{input_path}`.
+    #[serde(default)]
+    pub image_edit_prefix_args: Option<Vec<String>>,
+    /// Extra argv appended to `args` ONLY on image dispatch (e.g.
+    /// codex requires `--full-auto` for image because the imagegen plugin
+    /// uses tool calls that would otherwise prompt for approval). Leaves the
+    /// `ask` dispatch path unchanged.
+    #[serde(default)]
+    pub image_extra_args: Option<Vec<String>>,
 }
 
 fn default_timeout_ms() -> u64 {
     180_000
+}
+
+impl BackendSpec {
+    /// Whether this backend declares support for the given kind.
+    pub fn supports(&self, kind: BackendKind) -> bool {
+        self.kinds.contains(&kind)
+    }
 }
 
 /// On-disk TOML schema — a flat list of `[[backend]]` tables.

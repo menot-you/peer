@@ -15,5 +15,9 @@
 
 pub mod dispatch;
 pub mod error;
+pub mod image;
+pub mod project;
 pub mod registry;
+pub mod session;
 pub mod tools;
+pub mod video;
