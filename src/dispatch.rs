@@ -1,11 +1,12 @@
 //! Subprocess dispatch: placeholder expansion → spawn → timeout → verdict parse.
 
 use std::collections::HashMap;
-use std::io::ErrorKind;
+use std::io::{self, ErrorKind};
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::LazyLock;
 use std::time::Instant;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use regex::Regex;
 
@@ -18,12 +19,13 @@ static VERDICT_RE: LazyLock<Regex> = LazyLock::new(|| {
         .expect("VERDICT_RE literal must compile")
 });
 use serde::{Deserialize, Serialize};
-use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::process::Command;
 use tokio::time::Duration;
 
 use crate::error::PeerError;
 use crate::registry::Registry;
+use crate::session::{write_meta, PeerSession};
 
 /// Caller input to `ask`.
 #[derive(Debug, Clone, Deserialize)]
@@ -73,7 +75,21 @@ pub struct AskResponse {
     pub elapsed_ms: u64,
     pub exit_code: i32,
     pub stderr: String,
+    /// Canonical pointer to the captured stdout artifact.
+    ///
+    /// When `save_raw=true`, this is the session's `stdout.log` — the SAME
+    /// file that was streamed live during execution. Callers tailing the
+    /// session can keep the tail open and inspect the full artifact here
+    /// after completion.
     pub artifact_path: Option<PathBuf>,
+    /// Session id for the dispatch (e.g. `0001745260834-042-codex`).
+    /// Always present; exposed so callers can reconstruct
+    /// `<sessions_root>/<id>/` paths without string math.
+    pub session_id: String,
+    /// Absolute session directory containing `stdout.log`, `stderr.log`,
+    /// and `meta.json`. Callers can `tail -f <dir>/stdout.log` during
+    /// execution; after completion the files are closed but persist.
+    pub session_dir: PathBuf,
 }
 
 /// Clamp range enforced on user-supplied timeouts.
@@ -85,6 +101,13 @@ const STDERR_TAIL_BYTES: usize = 2048;
 const VERDICT_TAIL_LINES: usize = 200;
 
 /// Dispatch a single `ask` call.
+///
+/// Allocates a session directory BEFORE spawning the backend so every
+/// dispatch is traceable via `~/.nott/peer/sessions/latest/`. Stdout and
+/// stderr are tee'd into `stdout.log` / `stderr.log` in real time (flushed
+/// per chunk) so external `tail -f` observes progress as the CLI runs.
+/// Metadata is written at start and overwritten at completion with
+/// elapsed + exit_code.
 pub async fn dispatch(registry: &Registry, req: AskRequest) -> Result<AskResponse, PeerError> {
     let spec = registry
         .get(&req.backend)
@@ -95,9 +118,28 @@ pub async fn dispatch(registry: &Registry, req: AskRequest) -> Result<AskRespons
     let timeout = clamp_timeout(req.timeout_ms.unwrap_or(spec.timeout_ms_default))?;
     let expanded_args = expand_args(&spec.args, &req.prompt, &req.extra_args);
 
-    tracing::debug!(
+    // Allocate session dir early — independent of save_raw, so every
+    // invocation is tailable via `~/.nott/peer/sessions/latest/`.
+    let session = PeerSession::new(&spec.name)?;
+    let started_at = epoch_secs();
+    let _ = write_meta(
+        &session,
+        &serde_json::json!({
+            "backend": spec.name,
+            "command": spec.command,
+            "args": expanded_args,
+            "stdin": spec.stdin,
+            "timeout_ms": timeout,
+            "started_at": started_at,
+            "status": "running",
+        }),
+    );
+
+    tracing::info!(
         target = "peer::dispatch",
         backend = %spec.name,
+        session_id = %session.id,
+        session_dir = %session.dir.display(),
         command = %spec.command,
         timeout_ms = timeout,
         stdin = spec.stdin,
@@ -138,11 +180,43 @@ pub async fn dispatch(registry: &Registry, req: AskRequest) -> Result<AskRespons
         }
     }
 
-    let wait = child.wait_with_output();
-    let output = match tokio::time::timeout(Duration::from_millis(timeout), wait).await {
-        Ok(Ok(output)) => output,
+    // Take the pipes and tee them to disk + memory concurrently. We keep
+    // the in-memory buffers for the final response; the disk copy exists
+    // for live `tail -f` observers and post-mortem inspection.
+    let stdout_pipe = child
+        .stdout
+        .take()
+        .ok_or_else(|| PeerError::Io(io::Error::other("stdout not piped")))?;
+    let stderr_pipe = child
+        .stderr
+        .take()
+        .ok_or_else(|| PeerError::Io(io::Error::other("stderr not piped")))?;
+
+    let stdout_path = session.stdout_path();
+    let stderr_path = session.stderr_path();
+    let stdout_task = tokio::spawn(tee_stream(stdout_pipe, stdout_path));
+    let stderr_task = tokio::spawn(tee_stream(stderr_pipe, stderr_path));
+
+    let wait = child.wait();
+    let status = match tokio::time::timeout(Duration::from_millis(timeout), wait).await {
+        Ok(Ok(status)) => status,
         Ok(Err(e)) => return Err(PeerError::Io(e)),
         Err(_) => {
+            // Kill the child so the tee tasks can drain + close cleanly.
+            let _ = child.start_kill();
+            let _ = child.wait().await;
+            let _ = write_meta(
+                &session,
+                &serde_json::json!({
+                    "backend": spec.name,
+                    "command": spec.command,
+                    "args": expanded_args,
+                    "stdin": spec.stdin,
+                    "timeout_ms": timeout,
+                    "started_at": started_at,
+                    "status": "timeout",
+                }),
+            );
             return Err(PeerError::Timeout {
                 backend: spec.name.clone(),
                 elapsed_ms: timeout,
@@ -150,12 +224,31 @@ pub async fn dispatch(registry: &Registry, req: AskRequest) -> Result<AskRespons
         }
     };
 
+    let stdout_bytes = join_tee(stdout_task).await?;
+    let stderr_bytes = join_tee(stderr_task).await?;
+
     let elapsed_ms = u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX);
-    let raw = String::from_utf8(output.stdout).map_err(|_| PeerError::ParseFailure {
+    let raw = String::from_utf8(stdout_bytes).map_err(|_| PeerError::ParseFailure {
         backend: spec.name.clone(),
     })?;
-    let stderr_all = String::from_utf8_lossy(&output.stderr).into_owned();
-    let exit_code = output.status.code().unwrap_or(-1);
+    let stderr_all = String::from_utf8_lossy(&stderr_bytes).into_owned();
+    let exit_code = status.code().unwrap_or(-1);
+
+    let _ = write_meta(
+        &session,
+        &serde_json::json!({
+            "backend": spec.name,
+            "command": spec.command,
+            "args": expanded_args,
+            "stdin": spec.stdin,
+            "timeout_ms": timeout,
+            "started_at": started_at,
+            "finished_at": epoch_secs(),
+            "elapsed_ms": elapsed_ms,
+            "exit_code": exit_code,
+            "status": "done",
+        }),
+    );
 
     // Detect auth failure patterns BEFORE returning — caller wants the typed
     // error, not a generic exit=1.
@@ -172,7 +265,7 @@ pub async fn dispatch(registry: &Registry, req: AskRequest) -> Result<AskRespons
 
     let verdict = parse_verdict(&raw);
     let artifact_path = if req.save_raw {
-        Some(save_artifact(&spec.name, &raw)?)
+        Some(session.stdout_path())
     } else {
         None
     };
@@ -185,6 +278,8 @@ pub async fn dispatch(registry: &Registry, req: AskRequest) -> Result<AskRespons
         exit_code,
         stderr: tail_stderr(&stderr_all),
         artifact_path,
+        session_id: session.id.clone(),
+        session_dir: session.dir.clone(),
     })
 }
 
@@ -290,14 +385,48 @@ pub fn parse_verdict(raw: &str) -> Verdict {
     }
 }
 
-fn save_artifact(backend: &str, raw: &str) -> Result<PathBuf, PeerError> {
-    let epoch = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
+/// Read `reader` chunk-by-chunk, appending each chunk to `path` (flushed
+/// immediately) AND to an in-memory buffer that is returned to the caller.
+///
+/// Flushing on every chunk is intentional: without it, `tail -f` on the
+/// session log sees nothing until the subprocess exits. With it, observers
+/// see output as the backend emits it.
+async fn tee_stream<R>(mut reader: R, path: PathBuf) -> io::Result<Vec<u8>>
+where
+    R: tokio::io::AsyncRead + Unpin,
+{
+    let mut file = tokio::fs::File::create(&path).await?;
+    let mut buf: Vec<u8> = Vec::new();
+    let mut chunk = [0u8; 4096];
+    loop {
+        let n = reader.read(&mut chunk).await?;
+        if n == 0 {
+            break;
+        }
+        file.write_all(&chunk[..n]).await?;
+        file.flush().await?;
+        buf.extend_from_slice(&chunk[..n]);
+    }
+    Ok(buf)
+}
+
+/// Join a tee task, flattening `JoinError` + `io::Error` into [`PeerError`].
+async fn join_tee(
+    handle: tokio::task::JoinHandle<io::Result<Vec<u8>>>,
+) -> Result<Vec<u8>, PeerError> {
+    match handle.await {
+        Ok(Ok(bytes)) => Ok(bytes),
+        Ok(Err(e)) => Err(PeerError::Io(e)),
+        Err(join_err) => Err(PeerError::Io(io::Error::other(join_err))),
+    }
+}
+
+/// Seconds since the Unix epoch; falls back to 0 on a broken clock.
+fn epoch_secs() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
-        .unwrap_or(0);
-    let path = std::env::temp_dir().join(format!("peer-{backend}-{epoch}.txt"));
-    std::fs::write(&path, raw).map_err(PeerError::Io)?;
-    Ok(path)
+        .unwrap_or(0)
 }
 
 // -------------------------------------------------------------------------
