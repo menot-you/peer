@@ -12,6 +12,7 @@
 
 pub mod minimax;
 pub mod session;
+pub mod veo;
 
 use std::path::PathBuf;
 
@@ -25,9 +26,11 @@ use crate::registry::{BackendKind, BackendSpec, Registry, Transport};
 pub struct VideoRequest {
     pub backend: String,
     pub prompt: String,
-    /// Optional path to an image to use as the first frame.
+    /// Optional path to an image to use as the first frame (MiniMax) or
+    /// conditioning image (Veo). Provider decides how to use it.
     pub first_frame_image: Option<PathBuf>,
     pub output_path: Option<PathBuf>,
+    pub aspect_ratio: Option<String>,
     pub model: Option<String>,
     pub timeout_ms: Option<u64>,
 }
@@ -128,6 +131,10 @@ async fn dispatch_http(
     match provider.as_str() {
         "minimax" | "minimax-video" => {
             let backend = minimax::MinimaxVideoBackend;
+            backend.generate(spec, req, ctx).await
+        }
+        "gemini" | "veo" => {
+            let backend = veo::VeoBackend;
             backend.generate(spec, req, ctx).await
         }
         "" => Err(PeerError::InvalidInput(format!(

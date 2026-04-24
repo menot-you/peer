@@ -116,12 +116,17 @@ pub struct VideoParams {
     /// Textual description of the video.
     pub prompt: String,
     /// Optional path to an image used as the first frame (MiniMax).
+    /// Veo currently rejects this param — pass a text prompt only.
     #[serde(default)]
     pub first_frame_image: Option<String>,
     /// Override the default output path. Absent → auto at
     /// `{project_root}/.nott/generated/videos/<session_id>.mp4`.
     #[serde(default)]
     pub output_path: Option<String>,
+    /// Aspect ratio (backend-specific). Veo accepts "16:9" or "9:16".
+    /// Ignored by MiniMax video-01.
+    #[serde(default)]
+    pub aspect_ratio: Option<String>,
     /// Override the backend's default model.
     #[serde(default)]
     pub model: Option<String>,
@@ -337,6 +342,7 @@ impl PeerMcpServer {
             prompt: p.prompt,
             first_frame_image: p.first_frame_image.map(PathBuf::from),
             output_path: p.output_path.map(PathBuf::from),
+            aspect_ratio: p.aspect_ratio,
             model: p.model,
             timeout_ms: p.timeout_ms,
         };

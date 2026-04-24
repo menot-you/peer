@@ -28,12 +28,7 @@ fn tiny_png_bytes() -> Vec<u8> {
     STANDARD.decode(TINY_PNG_B64).unwrap()
 }
 
-fn spec_http(
-    name: &str,
-    provider: &str,
-    base_url: String,
-    api_key_env: &str,
-) -> BackendSpec {
+fn spec_http(name: &str, provider: &str, base_url: String, api_key_env: &str) -> BackendSpec {
     BackendSpec {
         name: name.to_string(),
         description: format!("test {name}"),

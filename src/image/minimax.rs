@@ -121,8 +121,8 @@ impl ImageBackend for MinimaxImageBackend {
                 ctx.base_dir
                     .join(format!("{}-extra-{}.png", ctx.session_id, idx + 1))
             });
-            write_base64_png(&spec.name, &b64, &target).await?;
-            written.push(target);
+            let actual = write_base64_png(&spec.name, &b64, &target).await?;
+            written.push(actual);
         }
 
         Ok(written)

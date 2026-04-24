@@ -136,6 +136,7 @@ pub async fn dispatch_image(
                 .model
                 .clone()
                 .or_else(|| spec.model.clone())
+                .or_else(|| parse_model_from_args(&spec.args))
                 .unwrap_or_else(|| spec.name.clone());
             let aspect_ratio = req
                 .aspect_ratio
@@ -216,4 +217,57 @@ pub(crate) fn resolve_api_key(spec: &BackendSpec) -> Result<String, PeerError> {
 pub(crate) fn resolve_timeout(spec: &BackendSpec, requested: Option<u64>) -> u64 {
     let ms = requested.unwrap_or(spec.timeout_ms_default);
     ms.clamp(10_000, 900_000)
+}
+
+/// Best-effort model parse from a CLI backend's argv — looks for
+/// `--model X` / `-m X` / `--model=X`. Used by codex where the model is
+/// tuned per-project via `args = ["--model", "gpt-5.5", "exec"]` instead
+/// of a dedicated `model` field in `peer.toml`.
+pub(crate) fn parse_model_from_args(args: &[String]) -> Option<String> {
+    let mut iter = args.iter();
+    while let Some(arg) = iter.next() {
+        if let Some(rest) = arg.strip_prefix("--model=") {
+            if !rest.is_empty() {
+                return Some(rest.to_string());
+            }
+        } else if arg == "--model" || arg == "-m" {
+            if let Some(next) = iter.next() {
+                return Some(next.clone());
+            }
+        }
+    }
+    None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_model_from_args;
+
+    #[test]
+    fn parse_model_double_dash() {
+        let args = vec![
+            "--model".to_string(),
+            "gpt-5.5".to_string(),
+            "exec".to_string(),
+        ];
+        assert_eq!(parse_model_from_args(&args), Some("gpt-5.5".to_string()));
+    }
+
+    #[test]
+    fn parse_model_single_dash() {
+        let args = vec!["-m".to_string(), "sonnet-4".to_string()];
+        assert_eq!(parse_model_from_args(&args), Some("sonnet-4".to_string()));
+    }
+
+    #[test]
+    fn parse_model_equals_form() {
+        let args = vec!["--model=haiku".to_string()];
+        assert_eq!(parse_model_from_args(&args), Some("haiku".to_string()));
+    }
+
+    #[test]
+    fn parse_model_missing_returns_none() {
+        let args = vec!["exec".to_string(), "--full-auto".to_string()];
+        assert_eq!(parse_model_from_args(&args), None);
+    }
 }

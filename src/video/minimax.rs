@@ -21,7 +21,10 @@ use crate::error::PeerError;
 use crate::image::http::{build_client, http_error, payload_error};
 use crate::registry::BackendSpec;
 
-use super::{resolve_api_key, resolve_timeout, session::VideoContext, VideoBackend, VideoOutcome, VideoRequest};
+use super::{
+    resolve_api_key, resolve_timeout, session::VideoContext, VideoBackend, VideoOutcome,
+    VideoRequest,
+};
 
 pub struct MinimaxVideoBackend;
 
@@ -96,7 +99,10 @@ impl VideoBackend for MinimaxVideoBackend {
         if !create_status.is_success() {
             return Err(PeerError::HttpFailure {
                 backend: spec.name.clone(),
-                message: format!("HTTP {create_status} on create — {}", truncate(&create_text)),
+                message: format!(
+                    "HTTP {create_status} on create — {}",
+                    truncate(&create_text)
+                ),
             });
         }
         let create_json: Value = serde_json::from_str(&create_text)
@@ -172,10 +178,7 @@ impl VideoBackend for MinimaxVideoBackend {
                 "Fail" => {
                     return Err(PeerError::HttpFailure {
                         backend: spec.name.clone(),
-                        message: format!(
-                            "task {task_id} failed: {}",
-                            truncate(&q_text)
-                        ),
+                        message: format!("task {task_id} failed: {}", truncate(&q_text)),
                     });
                 }
                 _ => continue, // Queueing | Preparing | Processing | Unknown

@@ -148,6 +148,7 @@ mod tests {
             prompt: "a running horse".into(),
             first_frame_image: None,
             output_path: None,
+            aspect_ratio: None,
             model: None,
             timeout_ms: None,
         }

@@ -28,7 +28,7 @@ use crate::error::PeerError;
 use crate::registry::BackendSpec;
 
 use super::http::{
-    build_client, http_error, mime_for, payload_error, read_as_base64, write_base64_png,
+    build_client, http_error, mime_for, payload_error, read_as_base64, write_image_bytes,
 };
 use super::{resolve_api_key, resolve_timeout, session::ImageContext, ImageBackend, ImageRequest};
 
@@ -267,17 +267,15 @@ impl ImageBackend for GeminiImageBackend {
             let Some(first) = bytes_batches.into_iter().next() else {
                 return Err(payload_error(&spec.name, "no image bytes on iteration"));
             };
-            tokio::fs::write(target, &first)
-                .await
-                .map_err(PeerError::Io)?;
-            written.push(target.clone());
+            let actual = write_image_bytes(&spec.name, &first, target).await?;
             tracing::debug!(
                 target = "peer::image::gemini",
                 idx,
-                path = %target.display(),
+                path = %actual.display(),
                 bytes = first.len(),
                 "saved generated image"
             );
+            written.push(actual);
         }
         Ok(written)
     }
@@ -309,17 +307,14 @@ impl ImageBackend for GeminiImageBackend {
         let Some(first) = bytes_batches.into_iter().next() else {
             return Err(payload_error(&spec.name, "no image bytes on edit"));
         };
-        tokio::fs::write(target, &first)
-            .await
-            .map_err(PeerError::Io)?;
+        let actual = write_image_bytes(&spec.name, &first, target).await?;
         tracing::debug!(
             target = "peer::image::gemini",
-            path = %target.display(),
+            path = %actual.display(),
             bytes = first.len(),
             "saved edited image"
         );
-        let _ = write_base64_png; // keep import used across module
-        Ok(vec![target.clone()])
+        Ok(vec![actual])
     }
 }
 
